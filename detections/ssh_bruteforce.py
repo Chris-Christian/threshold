@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from app.models import DetectionMatch, SecurityEvent
 
-RULE_ID = "SSH_BRUTE_FORCE"
+RULE_ID = "THR-DET-001"
 FAILED_SSH_LOGIN = "ssh_login"
 FAILURE_THRESHOLD = 5
 WINDOW = timedelta(minutes=5)

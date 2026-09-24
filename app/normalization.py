@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from typing import Any
 
-from .models import SecurityEvent, SecurityEventInput
+from .models import AuthenticationDetails, SecurityEvent, SecurityEventInput
 
 
 def normalize_event(raw_event: dict[str, Any] | SecurityEventInput) -> SecurityEvent:
@@ -13,8 +13,11 @@ def normalize_event(raw_event: dict[str, Any] | SecurityEventInput) -> SecurityE
         if isinstance(raw_event, SecurityEventInput)
         else SecurityEventInput.model_validate(raw_event)
     )
+    normalized = validated.model_copy(
+        update={"details": validated.details or AuthenticationDetails(method="ssh")}
+    )
     return SecurityEvent(
-        **validated.model_dump(),
+        **normalized.model_dump(),
         raw=validated.model_dump(mode="json"),
     )
 

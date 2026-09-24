@@ -2,9 +2,9 @@
 
 from datetime import datetime, timezone
 from ipaddress import ip_address
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SUPPORTED_EVENT_TYPES = {
     "ssh_login",
@@ -12,8 +12,32 @@ SUPPORTED_EVENT_TYPES = {
     "file_access",
     "privilege_escalation",
     "process_start",
+    "web_request",
 }
 SUPPORTED_OUTCOMES = {"success", "failure", "info"}
+
+
+class AuthenticationDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["ssh"]
+
+
+class WebRequestDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["GET", "POST", "HEAD"]
+    path: str = Field(min_length=1, pattern=r"^/")
+    status_code: int = Field(ge=100, le=599)
+
+
+class ProcessDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1)
+
+
+EventDetails = AuthenticationDetails | WebRequestDetails | ProcessDetails
 
 
 class SecurityEventInput(BaseModel):
@@ -28,6 +52,7 @@ class SecurityEventInput(BaseModel):
     outcome: str
     username: str | None = Field(default=None, min_length=1)
     source_ip: str | None = None
+    details: EventDetails | None = None
 
     @field_validator("timestamp")
     @classmethod
@@ -56,6 +81,18 @@ class SecurityEventInput(BaseModel):
         if value not in SUPPORTED_OUTCOMES:
             raise ValueError(f"unsupported outcome: {value}")
         return value
+
+    @model_validator(mode="after")
+    def validate_event_details(self) -> "SecurityEventInput":
+        if self.event_type == "ssh_login":
+            if self.details is not None and not isinstance(self.details, AuthenticationDetails):
+                raise ValueError("ssh_login events require authentication details")
+        elif self.event_type == "web_request":
+            if not isinstance(self.details, WebRequestDetails):
+                raise ValueError("web_request events require web request details")
+        elif not isinstance(self.details, ProcessDetails):
+            raise ValueError(f"{self.event_type} events require process details")
+        return self
 
 
 class SecurityEvent(SecurityEventInput):

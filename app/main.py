@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from .models import Investigation, SecurityEventInput
 from .workflow import triage
 
-app = FastAPI(title="Threshold", version="0.1.0")
+app = FastAPI(title="Threshold", version="0.2.0")
 
 
 class TriageRequest(BaseModel):

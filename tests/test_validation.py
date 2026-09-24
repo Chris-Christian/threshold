@@ -38,3 +38,19 @@ def test_api_returns_422_for_malformed_event():
     response = TestClient(app).post("/investigations", json={"events": [malformed]})
 
     assert response.status_code == 422
+
+
+def test_web_events_require_strict_structured_details():
+    missing_details = {
+        **valid_event(),
+        "event_type": "web_request",
+        "details": None,
+    }
+    unknown_detail = {
+        **valid_event(),
+        "event_type": "web_request",
+        "details": {"method": "GET", "path": "/.env", "status_code": 404, "extra": "no"},
+    }
+
+    assert TestClient(app).post("/investigations", json={"events": [missing_details]}).status_code == 422
+    assert TestClient(app).post("/investigations", json={"events": [unknown_detail]}).status_code == 422
