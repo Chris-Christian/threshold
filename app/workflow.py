@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from detections.ssh_bruteforce import detect_ssh_brute_force
 from detections.ssh_success_after_bruteforce import detect_ssh_success_after_bruteforce
@@ -10,12 +10,12 @@ from detections.suspicious_post_auth import detect_suspicious_post_auth_activity
 from detections.web_reconnaissance import detect_web_reconnaissance
 
 from .correlation import correlate_events
-from .investigation import build_timeline
-from .models import Alert, Investigation
+from .investigation import build_investigations
+from .models import Alert, AlertCorrelation, DetectionMatch, InvestigationBatch, SecurityEvent
 from .normalization import normalize_events
 
 
-RuleRunner = Callable[[list, dict[str, list]], list]
+RuleRunner = Callable[[list[SecurityEvent], dict[str, list[DetectionMatch]]], list[DetectionMatch]]
 
 
 @dataclass(frozen=True)
@@ -41,13 +41,13 @@ RULES = (
 )
 
 
-def run_detections(events: list) -> list:
+def run_detections(events: list[SecurityEvent]) -> list[DetectionMatch]:
     """Run rules when their declared match dependencies are available.
 
     Normalized events remain the source of truth; dependent rule functions
     re-check event fields and windows before creating their own matches.
     """
-    matches_by_rule: dict[str, list] = {}
+    matches_by_rule: dict[str, list[DetectionMatch]] = {}
     pending = list(RULES)
     while pending:
         ready = [rule for rule in pending if all(dep in matches_by_rule for dep in rule.dependencies)]
@@ -59,19 +59,27 @@ def run_detections(events: list) -> list:
     return [match for rule in RULES for match in matches_by_rule[rule.rule_id]]
 
 
-def triage(raw_events: list[dict]) -> Investigation:
+def _alert_identity(match: DetectionMatch) -> str:
+    """Stable identity from rule, bounded scope, and normalized triggering events."""
+    return "|".join([
+        match.rule_id, match.host or "", match.source_ip or "", match.username or "",
+        match.window_start.isoformat(), match.window_end.isoformat(), *sorted(match.event_ids),
+    ])
+
+
+def create_alert(match: DetectionMatch) -> Alert:
+    return Alert(alert_id=str(uuid5(NAMESPACE_URL, _alert_identity(match))), detection=match)
+
+
+def triage(raw_events: list[dict]) -> InvestigationBatch:
     events = normalize_events(raw_events)
     matches = run_detections(events)
-    alerts = [Alert(alert_id=str(uuid4()), detection=match) for match in matches]
-
-    correlated = {
-        event.event_id
-        for match in matches
-        for event in correlate_events(events, match)
-    }
-    related_events = [event for event in events if event.event_id in correlated]
-    return Investigation(
-        alerts=alerts,
-        correlated_event_ids=sorted(correlated),
-        timeline=build_timeline(related_events),
-    )
+    alerts = [create_alert(match) for match in matches]
+    correlations = [
+        AlertCorrelation(
+            alert=alert,
+            correlated_event_ids=[event.event_id for event in correlate_events(events, alert.detection)],
+        )
+        for alert in alerts
+    ]
+    return build_investigations(events, correlations)

@@ -1,10 +1,11 @@
 """Shared domain models for the deterministic triage workflow."""
 
 from datetime import datetime, timezone
+from enum import Enum
 from ipaddress import ip_address
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 SUPPORTED_EVENT_TYPES = {
     "ssh_login",
@@ -119,15 +120,104 @@ class Alert(BaseModel):
     detection: DetectionMatch
 
 
-class TimelineEntry(BaseModel):
+class InvestigationStatus(str, Enum):
+    OPEN = "OPEN"
+    INVESTIGATING = "INVESTIGATING"
+    RESOLVED = "RESOLVED"
+
+
+class InvestigationOutcome(str, Enum):
+    TRUE_POSITIVE = "TRUE_POSITIVE"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+    BENIGN = "BENIGN"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class EvidenceItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     timestamp: datetime
     event_id: str
+    host: str
+    source_ip: str | None = None
+    username: str | None = None
     event_type: str
     outcome: str
+    details: EventDetails | None = None
     summary: str
 
 
+class TimelineEntry(EvidenceItem):
+    """Chronological analyst-facing representation of an evidence event."""
+
+
 class Investigation(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+
+    investigation_id: str
+    created_at: datetime
     alerts: list[Alert]
     correlated_event_ids: list[str]
+    evidence: list[EvidenceItem]
     timeline: list[TimelineEntry]
+    status: InvestigationStatus = InvestigationStatus.OPEN
+    outcome: InvestigationOutcome | None = None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Rollback lifecycle fields if cross-field assignment validation fails."""
+        if name not in {"status", "outcome"} or not hasattr(self, "status"):
+            super().__setattr__(name, value)
+            return
+        previous_status = self.status
+        previous_outcome = self.outcome
+        try:
+            super().__setattr__(name, value)
+        except ValidationError:
+            object.__setattr__(self, "status", previous_status)
+            object.__setattr__(self, "outcome", previous_outcome)
+            raise
+
+    @model_validator(mode="after")
+    def validate_status_outcome(self) -> "Investigation":
+        if self.status == InvestigationStatus.RESOLVED and self.outcome is None:
+            raise ValueError("resolved investigations require an outcome")
+        if self.status != InvestigationStatus.RESOLVED and self.outcome is not None:
+            raise ValueError("an outcome is allowed only when an investigation is resolved")
+        return self
+
+
+class AlertCorrelation(BaseModel):
+    """The explicit correlation relationship retained for one alert."""
+
+    alert: Alert
+    correlated_event_ids: list[str]
+
+
+class InvestigationBatch(BaseModel):
+    investigations: list[Investigation]
+
+    @property
+    def alerts(self) -> list[Alert]:
+        """Compatibility view for callers that previously consumed one batch result."""
+        rule_order = {"THR-DET-001": 0, "THR-DET-003": 1, "THR-DET-002": 2, "THR-DET-004": 3}
+        return sorted(
+            [alert for investigation in self.investigations for alert in investigation.alerts],
+            key=lambda alert: (rule_order.get(alert.detection.rule_id, len(rule_order)), alert.alert_id),
+        )
+
+    @property
+    def correlated_event_ids(self) -> list[str]:
+        return sorted(
+            {
+                event_id
+                for investigation in self.investigations
+                for event_id in investigation.correlated_event_ids
+            }
+        )
+
+    @property
+    def timeline(self) -> list[TimelineEntry]:
+        return sorted(
+            [entry for investigation in self.investigations for entry in investigation.timeline],
+            key=lambda entry: (entry.timestamp, entry.event_id),
+        )
