@@ -2,8 +2,6 @@
 
 Threshold is a deterministic defensive-security alert triage and investigation engine. V0.2 processes simulated security events, detects defined activity patterns, creates alerts, correlates bounded related events, and builds a chronological investigation timeline.
 
-Threshold does not include Jev, AI/LLMs, a database, frontend, Docker, cloud or external integrations, or autonomous response.
-
 ## Supported event types
 
 Every event has a strict common envelope: event ID, timezone-aware timestamp, target host, outcome, optional source IP and username, event type, and event-specific `details`. Timestamps are normalized to UTC.
