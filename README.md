@@ -1,55 +1,56 @@
 # Threshold
 
-Threshold is a deterministic defensive-security alert triage and investigation engine. V0.2 processes simulated security events, detects defined activity patterns, creates alerts, correlates bounded related events, and builds a chronological investigation timeline.
+Threshold is a deterministic defensive-security alert triage, investigation, and detection-quality evaluation engine. V0.4 uses only synthetic inputs and fixed deterministic rules; it includes no Jev, AI/LLMs, database, frontend, Docker, external integration, or autonomous response.
 
-## Supported event types
+## Detection and event model
 
-Every event has a strict common envelope: event ID, timezone-aware timestamp, target host, outcome, optional source IP and username, event type, and event-specific `details`. Timestamps are normalized to UTC.
+Events use a strict common envelope with timezone-aware timestamps normalized to UTC, plus typed details for SSH authentication, web requests, and process activity. Unknown fields are rejected.
 
-- `ssh_login` uses authentication details (`method: "ssh"`).
-- `web_request` uses web details: HTTP method, path, and response status.
-- `command_execution`, `process_start`, `file_access`, and `privilege_escalation` use process details with a named action.
+| Rule | Behavior |
+|---|---|
+| `THR-DET-001` | Five failed SSH logins from one source IP to one host within five minutes. |
+| `THR-DET-002` | A matching SSH success within 15 minutes after a brute-force window. |
+| `THR-DET-003` | Three distinct sensitive web paths from one source IP to one host within five minutes. |
+| `THR-DET-004` | A documented suspicious action after the matching successful SSH authentication. |
 
-Unknown event fields and unknown detail fields are rejected. V0.1-style SSH events without `details` remain accepted and normalize to SSH authentication details.
+Detection remains independent of future decision-support systems. Dependent rules re-check normalized events; a previous match is a candidate, not unquestionable evidence.
 
-## Detection rules
+## V0.3 investigations
 
-| Rule | Detection | Explicit threshold/window |
-|---|---|---|
-| `THR-DET-001` | SSH brute force | Five failed SSH logins from one source IP to one host within five minutes. |
-| `THR-DET-002` | Brute force followed by SSH success | A same-IP, same-host SSH success more than the final failed attempt and within 15 minutes of a THR-DET-001 window. |
-| `THR-DET-003` | Web reconnaissance | Three distinct paths from `/.env`, `/.git/config`, `/wp-admin`, and `/phpmyadmin`, from one source IP to one host within five minutes. |
-| `THR-DET-004` | Suspicious post-authentication activity | One of `download_tool`, `add_user`, or `disable_logging`, from the same IP, host, and user after THR-DET-002 within 15 minutes. |
+Threshold creates one investigation per connected correlated-alert cluster. Alerts join a case only when correlated event-ID sets overlap, including transitively; unrelated SSH and web activity therefore stay separate.
 
-## Correlation
+Evidence and timelines are compact, immutable analyst-facing views derived from normalized source events. Investigations start `OPEN`, can move to `INVESTIGATING`, then to terminal `RESOLVED`. Resolution requires one analyst outcome: `TRUE_POSITIVE`, `FALSE_POSITIVE`, `BENIGN`, or `INCONCLUSIVE`.
 
-Correlation always re-checks normalized event fields; a detection match is a candidate, not unquestionable evidence.
+Alert IDs are deterministic UUID5 values derived from the rule ID, scope, detection window, and triggering event IDs. Investigation IDs are new UUID4 values. Investigation lifecycle state is held only in process memory and is lost when the API restarts.
 
-- SSH investigations require matching source IP, host, bounded timestamps, and relevant SSH/process activity. Process activity must follow a successful SSH login for the same user.
-- Web investigations require matching source IP, host, triggering time window, and a sensitive-path web request.
-- Events from other hosts, source IPs, users where relevant, unrelated event types, or outside the rule window are excluded.
+## V0.4 evaluation
 
-## Simulator scenarios
+The separate `evaluation/` package benchmarks rule quality without creating alerts, correlation output, or investigations:
 
-`simulator/linux_auth.py` provides deterministic scenarios for:
+```text
+labeled scenario → normalize_events() → run_detections() → comparison → metrics
+```
 
-- SSH brute force only
-- SSH brute force followed by successful authentication
-- SSH brute force, success, and suspicious post-auth activity
-- Benign SSH activity
-- Web reconnaissance
-- Benign web browsing
-- Unrelated activity for correlation-exclusion tests
+One deterministic labeled event sequence is one evaluation unit. Every scenario explicitly declares `expected_rule_ids`; ground truth is never inferred from detector output, alerts, investigations, or simulator behavior. The benchmark includes malicious, benign, mixed, below-threshold, exact-threshold, and outside-window SSH/web cases and is intentionally separate from the traffic simulator.
 
-## Architecture
+For each rule and scenario, metrics use one-vs-rest labels:
 
-- `app/normalization.py` validates input and normalizes event timestamps and structure.
-- `detections/` contains deterministic rules with stable IDs.
-- `app/workflow.py` registers rules with declared dependencies and runs each when prerequisites are available; independent rules do not depend on an SSH sequence.
-- `app/correlation.py` applies explicit, rule-aware correlation bounds.
-- `app/investigation.py` creates the timeline.
+```text
+TP: expected and observed      FP: not expected and observed
+FN: expected and not observed  TN: not expected and not observed
+```
 
-Future AI decision support, if introduced, belongs after this deterministic workflow. It must not perform raw event detection.
+`precision = TP / (TP + FP)` and `recall = TP / (TP + FN)` when their denominators are non-zero. `F1 = 2PR / (P + R)` when both measures are defined and their sum is positive. Undefined metrics are represented as `null`/`None`, never `0.0`.
+
+These metrics describe performance on the fixed synthetic evaluation dataset and are not claims about production detection accuracy.
+
+## Project layout
+
+- `app/` — validation, workflow, correlation, investigations, and FastAPI endpoints.
+- `detections/` — deterministic detection rules.
+- `simulator/` — synthetic traffic generation for development and detection tests.
+- `evaluation/` — labeled benchmark scenarios, evaluation models, and runner.
+- `tests/` — unit, workflow, investigation, and evaluation tests.
 
 ## Development
 
@@ -60,10 +61,4 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Start the API:
-
-```powershell
-uvicorn app.main:app --reload
-```
-
-Use `GET /health` for a health check and `POST /investigations` to submit an event batch.
+Start the API with `uvicorn app.main:app --reload`. The API exposes `GET /health`, `POST /investigations`, and focused in-memory investigation lifecycle endpoints. V0.4 intentionally adds no evaluation HTTP endpoint.

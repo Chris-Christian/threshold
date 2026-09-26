@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "threshold"
-version = "0.2.0"
+version = "0.4.0"
 description = "Defensive security alert triage and investigation engine"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,4 +21,4 @@ dev = ["httpx>=0.27", "pytest>=8.0"]
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-include = ["app*", "detections*", "simulator*"]
+include = ["app*", "detections*", "evaluation*", "simulator*"]
